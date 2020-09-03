@@ -31,7 +31,10 @@ superseded-by:
 
 ## Open Questions
 
-TBD
+1) Should we running `cloud-controller-manager` as:
+- static `Pod` managed from the `Node` filesystem.
+- `Deployment` backing up the `Pod`.
+- `ReplicaSet` to run a `Pod` on each master node.
 
 ## Summary
 
@@ -50,7 +53,8 @@ Upstream is currently moving towards exclusion of in-tree cloud-provider code fr
 ### Non-Goals
 
 - Force immediate exclusion of in-tree support for currently used providers, as their out-of-tree counterparts are added.
-- Introduce other approaches to rollout IPI cluster with `kind` or `cluster-api`.
+- Add support for CSI and other out-of-tree implementations of cluster storage interfaces.
+- Add support for running multiple cloud configurations in a single cluster.
 
 ## Proposal
 
@@ -87,20 +91,35 @@ The `external CCM` implementation will be hosted within openshift repository in 
 
 Preparation steps, common for all providers:
 - Add support for recognition of the `external` option in library-go: https://github.com/openshift/library-go/blob/master/pkg/operator/configobserver/cloudprovider/observe_cloudprovider.go#L154 which will disable config parsing and add `external-cloud-config` option in the `Infrastructure` resource, which will be only used for external providers.
-- Port the templates of `cloud-controller` from upstream repositories into proposed https://github.com/openshift/cluster-cloud-controller-manager-operator repository. Those templates will belong to newly created `openshift-cloud-controller` namespace.
+- Port the templates of `cloud-controller` from upstream repositories into proposed https://github.com/openshift/cluster-cloud-controller-manager-operator repository. Those templates will belong to newly created `openshift-cloud-controller` namespace and be managed with an operator.
 
 Each provider implementation will need to do the following minimal set of actions in order to make out-of-tree implemetation work:
 - Add `external` flag to `kube-controller-manager` pod instead of the previously used provider. Remove the `cloud-config` option from the template.
-- Add `external` flag to `kubelet`.
-- Deploy a `cloud-controller` `DaemonSet` in the `openshift-cloud-controller` namespace.
+- Add `external` flag to `kubelet`. Remove the `cloud-config` option from the template.
+- Deploy a `cloud-controller` pod in the `openshift-cloud-controller` namespace.
 
 ## Design Details
+
+### Kubelet
+
+Openshift manages `kubelet` configuration with `machine-config-operator`. The actual `cloud-config` arguments are passed externally from the `Infrastructure` resource on https://github.com/openshift/machine-config-operator/blob/2a51e49b0835bbd3ac60baa685299e86777b064f/pkg/controller/template/render.go#L310-L357, where the support for `external` cloud provider should be added. For each platform with `external` configuration, the `cloud-config` flag should not be set.
+
+### Kube-api-server
+
+No changes for the current configuration are needed
+
+### Kube-controller-manager
+
+TBD
 
 #### Upgrade/Downgrade strategy
 
 Upstream [proposal](https://github.com/kubernetes/enhancements/blob/473d6a094f07e399079d1ce4698d6e52ddcc1567/keps/sig-cloud-provider/20190422-cloud-controller-manager-migration.md#motivation) describes main pinpoints for migration between in-tree and out-of-tree for HA clusters. They propose implementation for cross-namespace leadership delegation, which would help Openshift to preserve HA during upgrages.
 
-In case the cluster does not require to be HA, then upgrading under CVO management, which will lead to two simultanious replicas of `cloud-controller`s running at the same time at some moment is not a problem.
+In case the cluster does not require to be HA, then upgrading under CVO management, which will lead to two simultanious replicas of `cloud-controllers` running at the same time at some moment is not a problem. Each provider, therefore supports multiple options to run the `cloud-controller`:
+
+1) As a `DaemonSet`. This is the HA option, where the leader-election on the running pod ensuring a single replica is serving cluster at any point in time.
+2) As a `Pod`. For Openshift this option is not sufficient, so non-HA environment will run this pod under `Deployment` or as a static resource managed from the `Node` filesystem in the `openshift-cloud-controller` namespace.
 
 #### Examples
 
@@ -108,6 +127,12 @@ In case the cluster does not require to be HA, then upgrading under CVO manageme
 
 Main repository: https://github.com/kubernetes/cloud-provider-aws/
 Sample manifests: https://github.com/kubernetes/cloud-provider-aws/tree/master/manifests
+
+To try external cloud-controller-manager, siply run:
+```bash
+oc apply -f https://raw.githubusercontent.com/kubernetes/cloud-provider-aws/master/manifests/rbac.yaml  
+oc apply -f https://raw.githubusercontent.com/kubernetes/cloud-provider-aws/master/manifests/aws-cloud-controller-manager-daemonset.yaml
+```
 
 ##### Azure
 
@@ -124,15 +149,12 @@ Sample manifests: https://github.com/kubernetes/cloud-provider-gcp/tree/master/d
 Main repository: https://github.com/kubernetes/cloud-provider-vsphere
 Sample manifests: https://github.com/kubernetes/cloud-provider-vsphere/tree/master/manifests/controller-manager
 
-##### Demo
-
-- Running vSphere `cloud-controller` out-of-tree: TBD
-
 ### Test Plan
 
-- Each provider at the time of migration should have a working CI implemetation, which will assist in testing the provisioning with out-of-tree support enabled. This requeires vSphere CI to be up and running and upgrade support for other providers.
+- Each provider at the time of migration should have a working CI implemetation, which will assist in testing the provisioning with out-of-tree support enabled.
 - Ensure that transition between in-tree and out-of-tree will be handled by the `Infrastracture` `external-cloud-config` field being set.
-- TBD
+- Ensure in-tree and out-of-tree providers could co-exist in the cluster if this is supported.
+- Ensure that upgrade from a release running on in-tree provider only to the out-of-tree succeeds.
 
 ##### Removing a deprecated feature
 
