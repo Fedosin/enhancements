@@ -11,7 +11,7 @@ approvers:
   - "@elmiko"
   - TBD
 creation-date: 2020-08-31
-last-updated: 2020-09-12
+last-updated: 2020-09-29
 status: implementable
 see-also:
   - "/enhancements/cloud-controller-manager/openstack-cloud-controller-manager.md"  
@@ -42,39 +42,32 @@ The Kubernetes community is currently moving towards exclusion of the in-tree cl
 - Prepare openshift components to accomodate the out-of-tree plugins and remove support for the in-tree implementation.
 - Describe an approach to select an `external` cloud provider installation for the cloud.
 - Provide the means to allow generic `cloud-controller` component registration via the provider specific upstream implemetation.
+- Concider support for running multiple cloud configurations in a single cluster. Build architecture with this concideration in mind.
 
 ### Non-Goals
 
 - Force immediate exclusion of in-tree support for currently used providers, as their out-of-tree counterparts are added.
 - Add support for CSI and other out-of-tree implementations of cluster storage interfaces.
-- Add support for running multiple cloud configurations in a single cluster.
 
 ## Proposal
 
 Add an out-of-tree support based on current IPI with minor adjustments, and make a seamless transition for all currently supported providers.
 
-This change will be gradually executed on all suported cloud providers: AWS, Azure, GCP, vSphere and IBM.
+This change will be gradually executed on all suported cloud providers: AWS, Azure, GCP and vSphere. The change could help inclusion for other cloud providers, such as [Yandex](https://github.com/flant/yandex-cloud-controller-manager) and IBM `CCMs`, if this will be concidered a goal.
 
 ### User Stories
 
-As a cloud developer, I’d like to improve support for cloud features for openshift
-
 #### Story 1:
 
-We’d like to deploy control-plane node on a spot instance, to allowing customers to get additional cost reduction on their clusters. In order to introduce and test this feature, we have to implement this in the kubernetes repository, first, then wait for the next release to get a “free” rebase on the feature. We are also bound to the kubernetes release cycles, making it hard to achieve the goal in case the core Kubernetes is already going through the feature freeze. Starting downstream is not an option, as the implementation could be rejected upstream or gain less attention then needs to quickly get it into the release, diverging our fork from the source.
+As a cloud developer, I’d like to improve support for cloud features for openshift. I'd like to develop and test new cloud providers with do not ship with default kubernetes distiribution, and require support for external cloud controller manager.
 
 #### Story 2:
 
-As an openshift developer I’m assigned a release blocker BZ regarding upstream implementation. Proving the value for merging this and making the bug a release blocker upstream requires careful communication with upstream maintainers, and explaining the value to the people whom are not necessarily involved into internal details, so their opinion could differ and delay merging an important fix.
+As a developer I'd like to develop, build and release fixes independently from the kubernetes core, and assume they will first land upstream and then will be carried over into openshift destribution with less effort.
 
 #### Story 3:
 
-We desire to extend our team responsibilities on upstream cloud providers in the future and gain weight in promoting features into upstream. Getting such for kubernetes repository is harder for us and maintainers, as this would mean giving weight for approving and merging features for the parts of the kubernetes project, not necessarily laying under our responsibilities and scope of knowledge.
-
-#### Story 4:
-
 We’d like to discuss technical details related to a specific cloud in a SIG meeting with people who are also involved into development in this domain, and that way gain useful insights into the cloud infrastructure, improve the overall quality of our features, stay on top of the new features, and improve the relations with maintainers outside of our company, which nevertheless share with us a common goal.
-
 
 ### Implementation Details
 
@@ -94,25 +87,15 @@ Each provider implementation will need to do the following minimal set of action
 - Use `external` flag in the `kubelet` pod. Remove the `cloud-config` option from the template.
 - Provision a `cloud-controller-manager` `DaemonSet` in the `openshift-cloud-controller-manager` namespace.
 
-#### API resource changes
+#### Existing resource changes
 
-In order to achieve desired cluster configuration with `external` cloud components, we need to add a new field into `Infrastructure` [resource](https://github.com/openshift/api/blob/c2f7aea5d89ee87d7510b50bdb08dde9028a53ef/config/v1/types_infrastructure.go#L11). With the addition, a `status.platformStatus.external` field will determine the architectural change in the cluster configuration. Other components will be able to consume the configuration same way as before, only with a minor change of the resource processing.
+##### Development
 
-```go
-type PlatformStatus struct {
-  ...
-	// External is a value used in infrastucture automaton to determine component-specific
-	// behavior for the PlatformType value. Components depending on this variable will
-	// ignore cloud specific detailes associated with the given platform type,
-	// and will concider the value of the infrastructure to be "external" - essentially
-	// disabling any further evaluation.
-	//
-	// This will allow to delegate task of processing platform specific bits
-	// to another component.
-	// +optional
-  External bool `json:"external"`
-  ...
-```
+In order to achieve desired cluster configuration with `external` cloud components, we need to add an annotation on the `Infrastructure` [resource](https://github.com/openshift/api/blob/c2f7aea5d89ee87d7510b50bdb08dde9028a53ef/config/v1/types_infrastructure.go#L11). The annotation will determine the architectural change in the cluster configuration. Other components will be able to consume the configuration same way as before, and will decide which flags will be set, if this annotation would be found.
+
+Proposed annotation: `infrastructure.openshift.io/external-cloud-provider: true`.
+
+The annoation will be a temporary measure to simlify the operator development, and enable testing the transition in CI. Once all providers will become out-of-tree, the annotation will be safe to remove.
 
 To ensure a smooth transition from the `in-tree` selection, `library-go` [implementation](https://github.com/openshift/library-go/blob/master/pkg/operator/configobserver/cloudprovider/observe_cloudprovider.go) will include an additional argument for the `cloudProviderObserver` structure, which will allow to preserve initial configuration strategy, until the new `observeExternal` flag will be set to `false`:
 
@@ -125,11 +108,24 @@ type cloudProviderObserver struct {
 }
 ```
 
-The `observeExternal` field will determine, if `status.platformStatus.external` field from the `Infrastructure` resource will be taken in account in establishing needed flags for a Kubernetes binary, such as some `cloud-controller-manager`, `kube-controller-manager`, etc. It will make the observer type to ignore content of the `cloud-config` file, and force the provider to be set as `external` if the option is not selected.
+The `observeExternal` field will determine, if annotation `external-cloud-provider` is present on the `Infrastructure` resource, and will be taken in account while establishing needed flags for a Kubernetes binaries. It will make the observer type to ignore content of the `cloud-config` file, and force the provider to be set as `external` if the option is not selected. The `kube-controller-manager`, `kube-api-server` and `kubelet` flag will be set as:
+
+```bash
+# No cloud-config option
+--cloud-provider=external
+```
+
+#### Final adjustments
+
+Once the provider is ready to be published with an extenal `CCM` support, the code parts for in-tree enablement will be removed on [these](https://github.com/openshift/cluster-kube-controller-manager-operator/blob/990ea3f2ace13be6579c00a889842c3f5d3e756a/pkg/operator/configobservation/configobservercontroller/observe_config_controller.go#L82-L85) lines.
 
 #### Kubelet
 
-Openshift manages `kubelet` configuration with `machine-config-operator`. The actual `cloud-config` arguments are passed externally from the `Infrastructure` resource on https://github.com/openshift/machine-config-operator/blob/2a51e49b0835bbd3ac60baa685299e86777b064f/pkg/controller/template/render.go#L310-L357, where the support for `external` cloud provider will be added. For each platform with `external` configuration, the `cloud-config` flag will not be set.
+Openshift manages `kubelet` configuration with `machine-config-operator`. The actual `cloud-config` arguments are set externally, based on the `Infrastructure` resource values on https://github.com/openshift/machine-config-operator/blob/2a51e49b0835bbd3ac60baa685299e86777b064f/pkg/controller/template/render.go#L310-L357, where the support for `external` cloud provider will be added. For each platform with `external` configuration, the `cloud-config` flag will not be set. 
+
+Kubelet is tightly coupled with `CCMs`, due to its [usage](https://github.com/kubernetes/kubernetes/blame/323f34858de18b862d43c40b2cced65ad8e24052/pkg/kubelet/cloudresource/cloud_request_manager.go#L98-L102) of cloud-provider interfaces, such as `Instances` and `NodeAdresses`. Whenever there is a need to bootstrap any `Node`, `kubelet` will collect missing information about the instance IP addresses, type and zone. This information could later be used by `kube-scheduler`.
+
+During this procedure all uninitialized `Nodes` in the cluster are [tainted](https://github.com/kubernetes/kubernetes/blob/c53ce48d48372c30053a9b67c6d1dee237b5cd69/pkg/kubelet/kubelet_node_status.go#L307-L311) with `node.cloudprovider.kubernetes.io/uninitialized: true`. This taint is removed after the [initialization](https://github.com/kubernetes/kubernetes/blob/46d522d0c8e94edb6d29606a28785e35259badd7/staging/src/k8s.io/cloud-provider/controllers/node/node_controller.go#L374-L376) by the cloud-provider.
 
 #### Kube-controller-manager
 
@@ -137,24 +133,24 @@ This configuration is managed by the `cluster-kube-controller-manager-operator` 
 
 #### Kube-api-server
 
-No changes for the current configuration are needed
+This component requires same [configuration](https://github.com/openshift/cluster-kube-apiserver-operator/blob/d54e109b333e4db52b681a6979c706b1bdd3a778/pkg/operator/configobservation/configobservercontroller/observe_config_controller.go#L133) changes as `kcm`.
 
 ### Operator resource management strategy
 
 Every cloud manages it's configuration differently, but share a common overall structure.
 
 1. `cloud-controller-manager` and related resources are deployed under one namespace.
-2. Each pod (`ccm`, `cloud-node-manager`, etc.) supports deployment with a `DaemonSet`.
+2. Each pod (`CCM`, `cloud-node-manager`, etc.) supports deployment with a `Deployment` resource.
 3. The pods are expected to run on `Nodes` marked as a control-plane with annotation:
 ```yaml
     node-role.kubernetes.io/master: ""
 ```
-4. The pods are sharing common command line arguments with the `kcm` pods, such as `--cloud-provider` and `--cloud-config`.
+4. The `CCM` pods are sharing common command line arguments with the `kcm` pods, such as `--cloud-provider` and `--cloud-config`.
 
 Proposed operator will not diverge from the upstream resource structuring:
 
 - Static infrastructure resources creation, such as namespaces or service accounts will be delegated to the [CVO](https://github.com/openshift/cluster-version-operator).
-- Operator will populate, create and manage the cloud-specific set of `DaemonSets`, based on the selected `platform` in the `Infrastructure` resource.
+- Operator will populate, create and manage the cloud-specific set of `Deployments`, based on the selected `platform` in the `Infrastructure` resource.
 - The `--cloud-provider` and the `--cloud-config` arguments will be populated using existing `library-go` based implementation from the [cluster-kube-controller-manager-operator](https://github.com/openshift/cluster-kube-controller-manager-operator/blob/990ea3f2ace13be6579c00a889842c3f5d3e756a/pkg/operator/configobservation/configobservercontroller/observe_config_controller.go#L82-L85).
 
 #### Examples for the cloud-controller-manager configurations
@@ -175,6 +171,8 @@ oc apply -f https://raw.githubusercontent.com/kubernetes/cloud-provider-aws/mast
 Main repository: https://github.com/kubernetes-sigs/cloud-provider-azure
 Sample manifests: https://github.com/kubernetes-sigs/cloud-provider-azure/tree/master/examples/out-of-tree
 
+Azure separated the `CCM` and the "cloud-node-manager" (`CNM`) into two binaries: https://github.com/kubernetes-sigs/cloud-provider-azure/tree/master/cmd.
+
 ##### GCP
 
 Main repository: https://github.com/kubernetes/cloud-provider-gcp
@@ -184,6 +182,8 @@ Sample manifests: https://github.com/kubernetes/cloud-provider-gcp/tree/master/d
 
 Main repository: https://github.com/kubernetes/cloud-provider-vsphere
 Sample manifests: https://github.com/kubernetes/cloud-provider-vsphere/tree/master/manifests/controller-manager
+
+Vsphere introduced an additional service to expose internal API server: https://github.com/kubernetes/cloud-provider-vsphere/blob/master/manifests/controller-manager/vsphere-cloud-controller-manager-ds.yaml#L64
 
 ## Upgrade/Downgrade strategy
 
@@ -208,15 +208,23 @@ Upstream is currently planning to remove support for the in-tree providers with 
 
 ## Timeline
 
+### Upstream 
+
 Follow the Kubernetes community discussions and implementation/releases
 
-### Kubernetes 1.18
-
+Kubernetes 1.18:
 - vSphere support graduaded to beta: https://github.com/kubernetes/enhancements/issues/670
 
-### Kubernetes 1.19
-
+Kubernetes 1.19
 - Azure support goes into beta: https://github.com/kubernetes/enhancements/issues/667
+
+### Openshift
+
+Release 4.7:
+- Migrate openstack provider on the out-of-tree implementation.
+
+Release 4.8:
+- Migrate vSphere, AWS, Azure and GCP providers on out-of-tree.
 
 ## Infrastructure Needed
 
@@ -226,7 +234,7 @@ Forks for out-of-tree provider repositories:
 - [AWS](https://github.com/kubernetes/cloud-provider-aws)
 - [GCP](https://github.com/kubernetes/cloud-provider-gcp)
 - [Azure](https://github.com/kubernetes-sigs/cloud-provider-azure)
-- [Vsphere](https://github.com/kubernetes-sigs/cloud-provider-vsphere)
+- [Vsphere](https://github.com/kubernetes/cloud-provider-vsphere)
 
 Mandatory operator repository:
 - [CCM-Operator](https://github.com/openshift/cluster-cloud-controller-manager-operator)
