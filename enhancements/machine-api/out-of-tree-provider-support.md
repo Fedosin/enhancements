@@ -21,7 +21,7 @@ approvers:
   - "@mrunalp"
   - "@sttts"
 creation-date: 2020-08-31
-last-updated: 2020-09-30
+last-updated: 2020-10-1
 status: implementable
 replaces:
 superseded-by:
@@ -60,8 +60,10 @@ Static pod:
 - Currently known `kubelet` dependency added requirement to run the component at bootstrapping phase.
 - Storage CSI migration will be required for OpenStack and vSphere providers
 - Networking:
-  - In GCP and OpenStack the `Routes` [interface](https://github.com/kubernetes/cloud-provider/blob/0dc0419ec04907f9deb6aa498cece84f10044726/cloud.go#L63) is implemented. Does it have any relation to the SDN? [Link](https://github.com/kubernetes/cloud-provider/blob/master/controllers/route/route_controller.go) to the controller managing this.
-  - OpenStack Load Balancing is an optional feature, though is [supported](https://github.com/kubernetes/cloud-provider/blob/master/controllers/service/controller.go) by the CCM interface with the [LoadBalancer()](https://github.com/kubernetes/cloud-provider/blob/0dc0419ec04907f9deb6aa498cece84f10044726/cloud.go#L49]. How important is this functionality during cluster runtime?
+  - Q: In the CCM interface the `Routes` [interface](https://github.com/kubernetes/cloud-provider/blob/0dc0419ec04907f9deb6aa498cece84f10044726/cloud.go#L63) is implemented. Does it have any relation to the SDN? [Link](https://github.com/kubernetes/cloud-provider/blob/master/controllers/route/route_controller.go) to the controller managing this.
+  A: No, the logic for `Routes` is [disabled](https://github.com/openshift/cluster-kube-controller-manager-operator/blob/8be94db9da523152af2268bd7f891fe089a424eb/bindata/v4.1.0/config/defaultconfig.yaml#L8-L9) by default across all providers.
+  - Q: Load Balancer setup for `Service` resources is [supported](https://github.com/kubernetes/cloud-provider/blob/master/controllers/service/controller.go) by the CCM interface with the [LoadBalancer()](https://github.com/kubernetes/cloud-provider/blob/0dc0419ec04907f9deb6aa498cece84f10044726/cloud.go#L49] method. How important is this functionality during cluster lifetime? 
+  A: Only the [ingress-operator](https://github.com/openshift/cluster-ingress-operator) is affected by this. Any `Route` resource changes will not be configured while the `CCM` is down, and any request to provision an external access to the cluster will not be satisfied.
 
 3. Should we reuse the existing cloud provider config or generate a new one?
 CCM config is backward compatible with the in-tree cloud provider. It means we can reuse it.
@@ -81,7 +83,7 @@ Using Cloud Controller Managers (CCMs) is the Kubernetes' [preferred way](https:
 
 Another motivation is to be closer to upstream by helping develop Cloud Controller Managers for various platforms, which is benefiting both OpenShift and Kubernetes.
 
-The change will help adding support for other cloud platforms, such as [Digital Ocean](https://github.com/digitalocean/digitalocean-cloud-controller-manager) or [Alibaba Cloud](https://github.com/kubernetes/cloud-provider-alibaba-cloud).
+The change will help adding support for other cloud platforms, such as [Packet](https://github.com/packethost/packet-ccm), [Digital Ocean](https://github.com/digitalocean/digitalocean-cloud-controller-manager) or [Alibaba Cloud](https://github.com/kubernetes/cloud-provider-alibaba-cloud).
 
 It's especially important to do this for OpenStack because switching to the external cloud provider fixes many issues and limitations with the in-tree cloud provider, such as it's reliance on [Nova metadata service](https://docs.openstack.org/nova/latest/admin/metadata-service.html). For OpenStack platform, this means the possibility for deploying on provider networks and at the edge.
 
@@ -202,23 +204,54 @@ A set of `cloud-controller-manager` pods will be running under a `Deployment` re
 
 Upgrade from previous versions of OpenShift on OpenStack will look like:
 
-- On the initial stage of upgrading `cluster-version-operator` starts `cluster-cloud-controller-manager-operator`.
+#### 4.6 -> 4.7:
 
+Upgrade (all platforms):
+
+- The `cluster-version-operator` starts `cluster-cloud-controller-manager-operator`.
+
+Downgrade (all platforms):
+
+- `cluster-cloud-controller-manager-operator` de-provisions CCM `deployments` and stops working.
+
+The steps below apply to OpenStack only:
+
+Upgrade:
+
+- The `cluster-version-operator` starts `cluster-cloud-controller-manager-operator`.
 - `cluster-cloud-controller-manager-operator` creates all required resources for CCM (RBAC, Service Account, etc.).
-
-- `cluster-cloud-controller-manager-operator` creates `deployments` for CCM.
-
 - `kube-apiserver` and `kube-controller-manager` are restarted without the `--cloud-provider` option.
-
 - `kubelet` is restarted with `--cloud-provider=external` option.
 
 Downgrade:
 
 - An old machine configuration is applied, which causes `kubelet` to restart with `--cloud-provider=some-platform` option.
-
 - `kube-apiserver` and `kube-controller-manager` are restarted with the `--cloud-provider=some-platform` option.
+- `cluster-cloud-controller-manager-operator` de-provisions CCM `deployments` and stops working.
 
-- `cluster-cloud-controller-manager-operator` stops working.
+#### 4.7 -> 4.8:
+
+Upgrade:
+
+- `cluster-cloud-controller-manager-operator` creates resources for any in-tree provider defaulting to this in 4.8 (expecting: AWS, Azure, GCP, vSphere).
+- `kube-apiserver` and `kube-controller-manager` are restarted without the `--cloud-provider` option.
+- `kubelet` is restarted with `--cloud-provider=external` option.
+
+Downgrade:
+
+- An old machine configuration is applied, which causes `kubelet` to restart with `--cloud-provider=some-platform` option (excluding OpenStack).
+- `kube-apiserver` and `kube-controller-manager` are restarted with the `--cloud-provider=some-platform` option.
+- `cluster-cloud-controller-manager-operator` de-provisions CCM resources for any platform, except OpenStack.
+
+#### 4.8 and later:
+
+Upgrade:
+
+- `cluster-cloud-controller-manager-operator` updates the state of resources for any in-tree provider defaulting to this since previous releases.
+
+Downgrade:
+
+- `cluster-cloud-controller-manager-operator` downgrades the state of resources for any in-tree provider defaulting to this since previous releases.
 
 ### Version Skew Strategy
 
@@ -243,10 +276,12 @@ When all required components are built, we can manually deploy OpenStack CCM and
 
 Actions:
 
-- Manually install CCM's [daemonset](https://github.com/kubernetes/cloud-provider-openstack/blob/master/manifests/controller-manager/openstack-cloud-controller-manager-ds.yaml) on a working OpenShift cluster deployed on OpenStack.
+- Manually install CCM's example [daemonset](https://github.com/kubernetes/cloud-provider-openstack/blob/master/manifests/controller-manager/openstack-cloud-controller-manager-ds.yaml) on a working OpenShift cluster deployed on OpenStack.
 
 - Update configuration of `kubelet` by replacing `--cloud-provider openstack` with `--cloud-provider external` and removing `--cloud-config` parameters.
 For `kube-apiserver` and `kube-controller-manager` we need to remove both `--cloud-provider` and `--cloud-config` parameters and restart `kubelet`.
+
+- Check the CCM functionality is operational at this point.
 
 **Note:** Example of a manual testing: https://asciinema.org/a/303399?speed=2
 
@@ -346,7 +381,10 @@ Q: Does every node need a CCM?
 A: No. Control plane nodes only. [Source](https://kubernetes.io/docs/concepts/overview/components/#cloud-controller-manager)
 
 Q: How does SDN depend on CCM?
-A: Most likely they are not related.
+A: CCMs manage `LoadBalancer` `Service` resources in all in-tree cloud implementations, except vSphere, so their creation will not be possible while the CCM is down. This will affect the [ingress-operator](https://github.com/openshift/cluster-ingress-operator). Cloud networking across `Nodes` is [disabled](https://github.com/openshift/cluster-kube-controller-manager-operator/blob/8be94db9da523152af2268bd7f891fe089a424eb/bindata/v4.1.0/config/defaultconfig.yaml#L8-L9) by default for all clouds.
+
+Q: How metrics are affected by the CCM misgration?
+A: Currently the `CCM` implementation is using the same set of metrics from the core repository. The `CCMO` will require prometheus configuration to collect them from a different location.
 
 ## Other notes
 
