@@ -21,7 +21,7 @@ approvers:
   - "@mrunalp"
   - "@sttts"
 creation-date: 2020-08-31
-last-updated: 2020-10-1
+last-updated: 2020-10-6
 status: implementable
 replaces:
 superseded-by:
@@ -32,44 +32,10 @@ superseded-by:
 ## Release Signoff Checklist
 
 - [x] Enhancement is `implementable`
-- [ ] Design details are appropriately documented from clear requirements
-- [ ] Test plan is defined
-- [ ] Graduation criteria for dev preview, tech preview, GA
+- [x] Design details are appropriately documented from clear requirements
+- [x] Test plan is defined
+- [x] Graduation criteria for tech preview, GA
 - [ ] User-facing documentation is created in [openshift-docs](https://github.com/openshift/openshift-docs/)
-
-## Open questions
-
-1. Should the post-install phase of the CCMs be managed by a static-pod, similarly as it is done for the bootstrapping phase, or with a `Deployment`?
-
-Pros and cons:
-
-Deployment:
-+ Simple lifecycle management
-+ Simple configuration changes
-- Requires additional RBAC configurations and running kubernetes components
-- Requires integration with the cloud credentials operator to access cloud credentials
-
-Static pod:
-+ Does not require a running/healthy etcd, api server and kube-controller-manager
-+ Thus will be used during bootstrapping phase
-- Requires management with an operator
-- Limited configuration options, and could not be reused from the bootstrapping template, each cloud will require its own template
-
-2. CCM relation to other openshift components, such as SDN and storage? How a non-operational CCM will affect cluster health, which components will take a hit?
-
-- Currently known `kubelet` dependency added requirement to run the component at bootstrapping phase.
-- Storage CSI migration will be required for OpenStack and vSphere providers
-- Networking:
-  - Q: In the CCM interface the `Routes` [interface](https://github.com/kubernetes/cloud-provider/blob/0dc0419ec04907f9deb6aa498cece84f10044726/cloud.go#L63) is implemented. Does it have any relation to the SDN? [Link](https://github.com/kubernetes/cloud-provider/blob/master/controllers/route/route_controller.go) to the controller managing this.
-  A: No, the logic for `Routes` is [disabled](https://github.com/openshift/cluster-kube-controller-manager-operator/blob/8be94db9da523152af2268bd7f891fe089a424eb/bindata/v4.1.0/config/defaultconfig.yaml#L8-L9) by default across all providers.
-  - Q: Load Balancer setup for `Service` resources is [supported](https://github.com/kubernetes/cloud-provider/blob/master/controllers/service/controller.go) by the CCM interface with the [LoadBalancer()](https://github.com/kubernetes/cloud-provider/blob/0dc0419ec04907f9deb6aa498cece84f10044726/cloud.go#L49] method. How important is this functionality during cluster lifetime? 
-  A: Only the [ingress-operator](https://github.com/openshift/cluster-ingress-operator) is affected by this. Any `Route` resource changes will not be configured while the `CCM` is down, and any request to provision an external access to the cluster will not be satisfied.
-
-3. Should we reuse the existing cloud provider config or generate a new one?
-CCM config is backward compatible with the in-tree cloud provider. It means we can reuse it.
-
-4. How to migrate PVs created by the in-tree cloud provider?
-[CSIMigration](https://kubernetes.io/blog/2019/12/09/kubernetes-1-17-feature-csi-migration-beta/) looks like the best option, especially if it is GA in 1.19.
 
 ## Summary
 
@@ -110,7 +76,7 @@ To maintain the lifecycle of the CCM we want to implement a cluster operator cal
 
 #### Story 1:
 
-As a cloud developer, I’d like to improve support for cloud features for openshift. I'd like to develop and test new cloud providers which do not ship with default kubernetes distiribution, and require support for external cloud controller manager.
+As a cloud developer, I’d like to improve support for cloud features for openshift. I'd like to develop and test new cloud providers which do not ship with default kubernetes distribution, and require support for external cloud controller manager.
 
 #### Story 2:
 
@@ -172,7 +138,7 @@ The `observeExternal` field will determine, when the annotation is present on th
 
 #### Bootstrap changes
 
-For the initial transition from in-tree to the out-of-tree, `CCM` pod will be created as static pod on the bootstrap node, to ensure swift removal of the `node.cloudprovider.kubernetes.io/uninitialized: true` taint from a newly created `Nodes`. Later stages, including cluster upgrades will be managed by an operator, which will ensure stability of the configuration, and will run a `CCM` in a `Deployment`. Initial usage of the static pod is justified by the need to run `CCM` pod before the `kube-api-server`, `etcd` and the `kube-scheduler` will get healthy.
+For the initial transition from in-tree to the out-of-tree, `CCM` pod will be created as static pod on the bootstrap node, to ensure swift removal of the `node.cloudprovider.kubernetes.io/uninitialized: true` taint from a newly created `Nodes`. Later stages, including cluster upgrades will be managed by an operator, which will ensure stability of the configuration, and will run a `CCM` in a `Deployment`. Initial usage of the static pod is justified by the need to run `CCM` pod before the `kube-api-server`, `etcd` and the `kube-scheduler` will get healthy, so the functionality does not rely on them.
 
 `CCM` operator will provide initial manifests that allow to deploy `CCM` on the bootstrap machine with `bootkube.sh` [script](https://github.com/openshift/installer/blob/master/data/data/bootstrap/files/usr/local/bin/bootkube.sh.template).
 
@@ -202,7 +168,7 @@ Operator will manage:
 - `Deployments`, provisioned by the operator will run the pods on the `control-plane` nodes, and will tolerate `cloudprovider.kubernetes.io/uninitialized` and `node-role.kubernetes.io/master` taints.
 - The `--cloud-provider` and the `--cloud-config` arguments will be populated using existing `library-go` based implementation from the [cluster-kube-controller-manager-operator](https://github.com/openshift/cluster-kube-controller-manager-operator/blob/990ea3f2ace13be6579c00a889842c3f5d3e756a/pkg/operator/configobservation/configobservercontroller/observe_config_controller.go#L82-L85) to share a common approach with the bootstrap specific static-pod configuration.
 - Operator will own a `cluster-operator` resource, which will report the readiness of all workloads at post-install phase. The conditions reported will help other dependent components, such as [openshift-ingress](https://github.com/openshift/cluster-ingress-operator).
-- Operator will be built with a goal to achieve provider decoupling and potential switching between providers in the cluster, and will concider support to run multiple providers in a cluster simultaniously (long-term goal).
+- Operator will be built with a goal to achieve provider decoupling and potential switching between providers in the cluster, and will consider support to run multiple providers in a cluster simultaneously (long-term goal).
 
 The operator image will be build and included in every release payload, and expected to be running.
 
@@ -210,16 +176,16 @@ The operator image will be build and included in every release payload, and expe
 
 Each cloud provider will be hosted under its own repository. Those repositories will be initially bootstrapped by forking upstream ones. The `CVO` will be responsible for provisioning static resources, such as `SA`, `RBAC`, `ServiceMonitors` for metrics, etc.. 
 
+The operator will also be responsible for constructing and creating `Deployment` for the cloud providers.
+
 Those repositories will also contain cloud-provider specific code, and a set of binaries for each of them to build and run. Each provider will be build inside a single image, which will be included in the release payload. The responsibility for the operator will be to choose which provider image should be used in a 
 cluster at any moment.
 
 #### CCM migration from KCM pod
 
-Currenly the cloud-specidic controller loops are running inside the `kcm` `Pod`. We need to preserve leadership over these parts during migration process. This includes migration from the `openshift-kube-controller-manager` namespace to the `openshift-cloud-controller-manager` namespace, which is not possible with current `leader-election` implementation.
+Currently the cloud-specific controller loops are running inside the `kcm` `Pod`. We need to preserve leadership over these parts during migration process. This includes migration from the `openshift-kube-controller-manager` namespace to the `openshift-cloud-controller-manager` namespace, which is not possible with current `leader-election` implementation.
 
-Upstream [proposal](https://github.com/kubernetes/enhancements/blob/473d6a094f07e399079d1ce4698d6e52ddcc1567/keps/sig-cloud-provider/20190422-cloud-controller-manager-migration.md#motivation) describes the main implementaion details for `Lease` resource. This cluster-scoped resource maintains cross-namespaced component leadership, and would help Openshift to preserve HA during migration from the in-tree to the out-of-tree.
-
-**TBD how the provider deployments will be constructed by the operator**
+Upstream [proposal](https://github.com/kubernetes/enhancements/blob/473d6a094f07e399079d1ce4698d6e52ddcc1567/keps/sig-cloud-provider/20190422-cloud-controller-manager-migration.md#motivation) describes the main implementation details for `Lease` resource. This cluster-scoped resource maintains cross-namespaced component leadership, and would help Openshift to preserve HA during migration from the in-tree to the out-of-tree.
 
 #### Credentials management
 
@@ -227,7 +193,7 @@ The operator is expected to be integrated with the [cloud-credentials-operator](
 
 *Bootstrap phase:*
 
-- Initial configuration with static pods is expected to be using `ConfigMap` credentials, similarly to what is done in `kcm` operator (link TBD).
+- Initial configuration with static pods is expected to be using `ConfigMap` credentials, similarly to what is [done](https://github.com/openshift/installer/blob/ba6d7fe087eada5a4fc260064c85a484a8c45aaf/data/data/bootstrap/files/usr/local/bin/bootkube.sh.template#L162) in `kcm` operator.
 - Once it is supported, the static pods will also use the `CredentialsRequest` to get cloud credentials.
 
 *Post-install phase:*
@@ -394,6 +360,16 @@ Likelihood: low
 - Ensure that upgrade from a release running on the in-tree provider only to the out-of-tree succeeds, and the downgrade is also supported.
 - Each provider should have a working CI implementation, which will assist in testing the provisioning and upgrades with out-of-tree support enabled.
 
+### Graduation Criteria
+
+##### Tech preview
+
+Operator handles OpenStack installation in 4.7.
+
+##### Tech Preview -> GA
+
+The operator will handle basic tasks, such as create initial templates at bootstrap and running all of supported in-tree providers after installation.
+
 ## FAQ
 
 Q: Can we disaster-recover a cluster without CCM running?
@@ -405,8 +381,20 @@ A: If CCM is not available, new nodes in the cluster will be left unschedulable.
 Q: Who talks to CCM?
 A: From an architectural point of view, only Kube API server is able to communicate with CCM. [Source](https://kubernetes.io/docs/concepts/architecture/cloud-controller/#design). All requests to CCM are sent by `kubelet`. KCM doesn't interact with CCM.
 
+Q: CCM relation to other openshift components, such as SDN and storage? How a non-operational CCM will affect cluster health, which components will take a hit?
+A: A couple of components rely on CCM at different time of the cluster lifetime:
+  - `kubelet` dependency requires removal of taints from newly created Nodes.
+  - Load Balancer setup for `Service` resources is [supported](https://github.com/kubernetes/cloud-provider/blob/master/controllers/service/controller.go) by the CCM interface with the [LoadBalancer()](https://github.com/kubernetes/cloud-provider/blob/0dc0419ec04907f9deb6aa498cece84f10044726/cloud.go#L49] method. The [ingress-operator](https://github.com/openshift/cluster-ingress-operator) is affected by this. Any `Route` resource changes will not be configured while the `CCM` is down, and any request to provision an external access to the cluster will not be satisfied.
+  - Storage CSI migration will be required for OpenStack and vSphere providers
+
+Q: Should we reuse the existing cloud provider config or generate a new one?
+A: CCM config is backward compatible with the in-tree cloud provider. It means we can reuse it.
+
+Q: How to migrate PVs created by the in-tree cloud provider?
+A: [CSIMigration](https://kubernetes.io/blog/2019/12/09/kubernetes-1-17-feature-csi-migration-beta/) looks like the best option, especially if it is GA in 1.19.
+
 Q: Does CCM provide an API? How is it hosted? HTTPS endpoint? Through load balancer?
-A: CCM provides a gRPC interface on port [10258](https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/cloud-provider/ports.go#L22). Like KCM, CCM supports a high available setup using leader election (which is on by default). [Source](https://kubernetes.io/docs/tasks/administer-cluster/running-cloud-controller/#requirements).
+A: No. The CCM vendors part of the code serving cloud features from the [cloud-provider](https://github.com/kubernetes/cloud-provider). CCM provides a secure TCP connection on port [10258](https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/cloud-provider/ports.go#L22) and communicates similarly to other kubernets components.
 
 Q: What are the thoughts about certificate management?
 A: Certificate management should be performed by the CCM operator, like it's done in the KCM operator.
@@ -418,16 +406,18 @@ Q: Does every node need a CCM?
 A: No. Control plane nodes only. [Source](https://kubernetes.io/docs/concepts/overview/components/#cloud-controller-manager)
 
 Q: How does SDN depend on CCM?
-A: CCMs manage `LoadBalancer` `Service` resources in all in-tree cloud implementations, except vSphere, so their creation will not be possible while the CCM is down. This will affect the [ingress-operator](https://github.com/openshift/cluster-ingress-operator). Cloud networking across `Nodes` is [disabled](https://github.com/openshift/cluster-kube-controller-manager-operator/blob/8be94db9da523152af2268bd7f891fe089a424eb/bindata/v4.1.0/config/defaultconfig.yaml#L8-L9) by default for all clouds.
+A: CCMs manage `LoadBalancer` `Service` resources in all in-tree cloud implementations, except vSphere, so their creation will not be possible while the CCM is down. This will affect the [ingress-operator](https://github.com/openshift/cluster-ingress-operator). Cloud networking across `Nodes` is [disabled](https://github.com/openshift/cluster-kube-controller-manager-operator/blob/8be94db9da523152af2268bd7f891fe089a424eb/bindata/v4.1.0/config/defaultconfig.yaml#L8-L9) by default for all clouds, so the routes will not be provisioned for the Node by the `CCM` (which is done by `Routes()` method in the interface), and so not required for SDN functionality.
 
-Q: How metrics are affected by the CCM misgration?
+Q: How metrics are affected by the CCM migration?
 A: Currently the `CCM` implementation is using the same set of metrics from the core repository. The `CCMO` will require prometheus configuration to collect them from a different location.
 
 ## Other notes
 
 ##### Removing a deprecated feature
 
-Upstream is currently planning to remove support for the in-tree providers with OCP-4.8 (kubernetes 1.21) - based on the slack [conversation](https://kubernetes.slack.com/archives/CPPU7NY8Y/p1589289501020600). The enchancement [describes](https://github.com/kubernetes/enhancements/blob/473d6a094f07e399079d1ce4698d6e52ddcc1567/keps/sig-cloud-provider/20190125-removing-in-tree-providers.md) steps towards this process. Our goal is to have a working alternative for the in-tree providers ready to be used on-par with old implementation befor the upstream release will remove this feature from core Kubernetes repository.
+Upstream is currently planning to remove support for the in-tree providers with OCP-4.8 (kubernetes 1.21) - based on the slack [conversation](https://kubernetes.slack.com/archives/CPPU7NY8Y/p1589289501020600). The enhancement [describes](https://github.com/kubernetes/enhancements/blob/473d6a094f07e399079d1ce4698d6e52ddcc1567/keps/sig-cloud-provider/20190125-removing-in-tree-providers.md) steps towards this process. Our goal is to have a working alternative for the in-tree providers ready to be used on-par with old implementation before the upstream release will remove this feature from core Kubernetes repository.
+
+The `cloud-provider` and `cloud-config` flags from `kubelet` will be removed in 1.23 - [link](https://github.com/kubernetes/kubernetes/pull/90408).
 
 ## Timeline
 
