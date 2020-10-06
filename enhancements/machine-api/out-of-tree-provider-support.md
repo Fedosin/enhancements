@@ -121,7 +121,7 @@ Proposed annotation: `infrastructure.openshift.io/external-cloud-provider`.
 
 The annotation will determine the architectural change in the cluster configuration. If this annotation would be found, other components, such as kube-api-server, kube-controller-manager and kubelet will set their flags accordingly, to allow hosting external `CCM` for any platform.
 
-The annotation will be a temporary measure to simplify the operator development, and enable testing the transition in CI. Once all providers will become out-of-tree, the annotation will be safe to remove.
+The annotation will be a temporary measure to simplify the operator development allowing multiple components to merge implementations of this feature independently before switching on the feature by changing the value of the annotation. Once all providers are moved out-of-tree, the annotation will be safe to remove.
 
 To ensure a smooth transition from the `in-tree` selection, `library-go` [implementation](https://github.com/openshift/library-go/blob/master/pkg/operator/configobserver/cloudprovider/observe_cloudprovider.go) will include an additional argument for the `cloudProviderObserver` structure, which will allow to preserve initial configuration strategy, until the new `observeExternal` flag will be set to `false`:
 
@@ -138,7 +138,7 @@ The `observeExternal` field will determine, when the annotation is present on th
 
 #### Bootstrap changes
 
-For the initial transition from in-tree to the out-of-tree, `CCM` pod will be created as static pod on the bootstrap node, to ensure swift removal of the `node.cloudprovider.kubernetes.io/uninitialized: true` taint from a newly created `Nodes`. Later stages, including cluster upgrades will be managed by an operator, which will ensure stability of the configuration, and will run a `CCM` in a `Deployment`. Initial usage of the static pod is justified by the need to run `CCM` pod before the `kube-api-server`, `etcd` and the `kube-scheduler` will get healthy, so the functionality does not rely on them.
+For the initial transition from in-tree to the out-of-tree, `CCM` pod will be created as static pod on the bootstrap node, to ensure swift removal of the `node.cloudprovider.kubernetes.io/uninitialized: true` taint from any newly created `Nodes`. Later stages, including cluster upgrades will be managed by an operator, which will ensure stability of the configuration, and will run a `CCM` in a `Deployment`. Initial usage of the static pod is justified by the need to run `CCM` pod before the `kube-api-server`, `etcd` and the `kube-scheduler` will get healthy, so the functionality does not rely on them.
 
 `CCM` operator will provide initial manifests that allow to deploy `CCM` on the bootstrap machine with `bootkube.sh` [script](https://github.com/openshift/installer/blob/master/data/data/bootstrap/files/usr/local/bin/bootkube.sh.template).
 
@@ -170,16 +170,19 @@ Operator will manage:
 - Operator will own a `cluster-operator` resource, which will report the readiness of all workloads at post-install phase. The conditions reported will help other dependent components, such as [openshift-ingress](https://github.com/openshift/cluster-ingress-operator).
 - Operator will be built with a goal to achieve provider decoupling and potential switching between providers in the cluster, and will consider support to run multiple providers in a cluster simultaneously (long-term goal).
 
-The operator image will be build and included in every release payload, and expected to be running.
+#### CVO managemnet
 
-#### Cloud provider segregation
+The operator image will be build and included in every release payload, and expected to be deployed and running at kuberentes operators level ([10-29](https://github.com/openshift/cluster-version-operator/blob/34010292c3abd2582b687e9c0ef76c5924998f39/docs/dev/operators.md#how-do-i-get-added-as-a-special-run-level)) right after the `kube-controller-manager-operator` at runlevel [25](https://github.com/openshift/cluster-kube-controller-manager-operator/tree/master/manifests).
 
-Each cloud provider will be hosted under its own repository. Those repositories will be initially bootstrapped by forking upstream ones. The `CVO` will be responsible for provisioning static resources, such as `SA`, `RBAC`, `ServiceMonitors` for metrics, etc.. 
+Proposed `CCMO` manifests runlevel is `26`.
 
-The operator will also be responsible for constructing and creating `Deployment` for the cloud providers.
+#### Cloud provider management
 
-Those repositories will also contain cloud-provider specific code, and a set of binaries for each of them to build and run. Each provider will be build inside a single image, which will be included in the release payload. The responsibility for the operator will be to choose which provider image should be used in a 
-cluster at any moment.
+Each cloud provider will be hosted under its own repository. Those repositories will be initially bootstrapped by forking upstream ones. 
+
+The `CVO` will be responsible for provisioning static resources, such as `SA`, `RBAC`, `ServiceMonitors` for metrics for the operator. Then, the operator will  be responsible for constructing and creating cloud provider resources.
+
+Forked provider repositories will also contain cloud-provider specific code, and a set of binaries for each of them to build and run. Each provider will be build inside a single image, which will be included in the release payload. The responsibility for the operator will be to choose which provider image should be used in a cluster at any moment.
 
 #### CCM migration from KCM pod
 
@@ -395,6 +398,12 @@ A: [CSIMigration](https://kubernetes.io/blog/2019/12/09/kubernetes-1-17-feature-
 
 Q: Does CCM provide an API? How is it hosted? HTTPS endpoint? Through load balancer?
 A: No. The CCM vendors part of the code serving cloud features from the [cloud-provider](https://github.com/kubernetes/cloud-provider). CCM provides a secure TCP connection on port [10258](https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/cloud-provider/ports.go#L22) and communicates similarly to other kubernets components.
+
+Q: What happens if the kcm leader has no access to ccm? Can it continue its work? Will it give up leadership?
+A: Expect KCM perform independently to CCM and do not care about its state after initial code migration. The CCM cluster operator will be responsible for going Unavailable or Degraded in a similar situation.
+
+Q: Can we disaster-recover a cluster without ccm running?
+A: Yes we can, only the Node management and Route provisioning will be compromized. 
 
 Q: What are the thoughts about certificate management?
 A: Certificate management should be performed by the CCM operator, like it's done in the KCM operator.
